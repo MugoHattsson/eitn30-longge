@@ -24,7 +24,7 @@ SPI1 = {
     'csn':dio.DigitalInOut(board.D18),
     }
 
-def tx(nrf, channel, address, count, size):
+def tx(nrf, channel, address, size, msg):
     nrf.open_tx_pipe(address)  # set address of RX node into a TX pipe
     nrf.listen = False
     nrf.channel = channel
@@ -33,29 +33,28 @@ def tx(nrf, channel, address, count, size):
     buffer = np.random.bytes(size)
 
     start = time.monotonic()
+    count = 1
+
+    assert(len(msg) <= 32)
+
     while count:
-        # use struct.pack to packetize your data
-        # into a usable payload
+    # use struct.pack to packetize your data
+    # into a usable payload
 
-        #buffer = struct.pack("<i", count)
-        # 'i' means a single 4 byte int value.
-        # '<' means little endian byte order. this may be optional
-        #print("Sending: {} as struct: {}".format(count, buffer))
-        result = nrf.send(buffer)
-        if not result:
-            #print("send() failed or timed out")
-            #print(nrf.what_happened())
-            status.append(False)
-        else:
-            #print("send() successful")
-            status.append(True)
-        # print timer results despite transmission success
-        count -= 1
-    total_time = time.monotonic() - start
+       buffer = struct.pack(f"{len(msg)}s", msg.encode("latin1"))
+       print("Sending: {} as struct: {}".format(msg, buffer))
+       result = nrf.send(buffer)
+       if not result:
+           print("send() failed or timed out")
+           status.append(False)
+       else:
+           print("send() successful")
+           status.append(True)
+       count -= 1
 
-    print('{} successfull transmissions, {} failures, {} bps'.format(sum(status), len(status)-sum(status), size*8*len(status)/total_time))
+    print('{} successfull transmissions, {} failures'.format(sum(status), len(status)-sum(status)))
 
-def rx(nrf, channel, address, count):
+def rx(nrf, channel, address):
     nrf.open_rx_pipe(0, address)
     nrf.listen = True  # put radio into RX mode and power up
     nrf.channel = channel
@@ -66,26 +65,19 @@ def rx(nrf, channel, address, count):
 
     start_time = None
     start = time.monotonic()
-    while count and (time.monotonic() - start) < 6:
-        if nrf.update() and nrf.pipe is not None:
-            if start_time is None:
-                start_time = time.monotonic()
-            # print details about the received packet
-            # fetch 1 payload from RX FIFO
-            received.append(nrf.any())
-            rx = nrf.read()  # also clears nrf.irq_dr status flag
-            # expecting an int, thus the string format '<i'
-            # the rx[:4] is just in case dynamic payloads were disabled
-            #buffer = struct.unpack("<i", rx[:4])  # [:4] truncates padded 0s
-            # print the only item in the resulting tuple from
-            # using `struct.unpack()`
-            #print("Received: {}, Raw: {}".format(buffer[0], rx))
-            #start = time.monotonic()
-            count -= 1
-            # this will listen indefinitely till count == 0
-    total_time = time.monotonic() - start_time
+    while (time.monotonic() - start) < 20:
+       if nrf.update() and nrf.pipe is not None:
+           if start_time is None:
+               start_time = time.monotonic()
 
-    print('{} received, {} average, {} bps'.format(len(received), np.mean(received), np.sum(received)*8/total_time))
+           received.append(nrf.any())
+           rx = nrf.read()  # also clears nrf.irq_dr status flag
+           buffer = struct.unpack(f"{len(rx)}s", rx)  # [:4] truncates padded 0s
+           # print the only item in the resulting tuple from
+           print("Received: {}".format(buffer[0].decode('latin1')))
+           #start = time.monotonic()
+
+    print('{} received, {} average'.format(len(received), np.mean(received)))
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='NRF24L01+ test')
@@ -102,9 +94,6 @@ if __name__ == "__main__":
     SPI1['spi'] = busio.SPI(**{x: SPI1[x] for x in ['clock', 'MOSI', 'MISO']})
 
     # initialize the nRF24L01 on the spi bus object
-    # rx_nrf = RF24(**{x: SPI0[x] for x in ['spi', 'csn', 'ce']})
-    # tx_nrf = RF24(**{x: SPI1[x] for x in ['spi', 'csn', 'ce']})
-
     rx_nrf = RF24(SPI0['spi'], SPI0['csn'], SPI0['ce_pin'])
     tx_nrf = RF24(SPI1['spi'], SPI1['csn'], SPI1['ce_pin'])
 
@@ -117,12 +106,19 @@ if __name__ == "__main__":
         nrf.ack = 1
         nrf.spi_frequency = 20000000
 
-    rx_process = Process(target=rx, kwargs={'nrf':rx_nrf, 'address':bytes(args.src, 'utf-8'), 'count': args.cnt, 'channel': args.rxchannel})
-    tx_process = Process(target=tx, kwargs={'nrf':tx_nrf, 'address':bytes(args.dst, 'utf-8'), 'count': args.cnt, 'channel': args.txchannel, 'size':args.size})
-
+    rx_process = Process(target=rx, kwargs={'nrf':rx_nrf, 'address':bytes(args.src, 'utf-8'), 'channel': args.rxchannel})
     rx_process.start()
     time.sleep(1)
-    tx_process.start()
 
-    tx_process.join()
+    start = time.monotonic()
+    while (time.monotonic() - start) < 20:
+        msg = input(">")
+        if len(msg) not in range(1,33):
+            rx_process.kill()
+            break
+
+        tx_process = Process(target=tx, kwargs={'nrf':tx_nrf, 'address':bytes(args.dst, 'utf-8'), 'channel': args.txchannel, 'size':args.size, 'msg':msg})
+        tx_process.start()
+        tx_process.join()
+
     rx_process.join()

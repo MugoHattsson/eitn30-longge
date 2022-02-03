@@ -10,6 +10,7 @@ import struct
 import argparse
 from random import randint
 import numpy as np
+from pytun import TunTapDevice
 
 SPI0 = {
     'MOSI':10,#dio.DigitalInOut(board.D10),
@@ -74,7 +75,7 @@ def rx(nrf, channel, address):
 
     start_time = None
     start = time.monotonic()
-    while (time.monotonic() - start) < 20:
+    while (time.monotonic() - start) < 10:
        if nrf.update() and nrf.pipe is not None:
            if start_time is None:
                start_time = time.monotonic()
@@ -121,15 +122,21 @@ if __name__ == "__main__":
 
     manager = Manager()
     queue = manager.Queue()
-
     
     tx_process = Process(target=tx, kwargs={'nrf':tx_nrf, 'address':bytes(args.dst, 'utf-8'), 'channel': args.txchannel, 'size':args.size, 'queue':queue})
     tx_process.start()
 
-    queue.put(struct.pack("20s", "dettaär20byteskanske".encode('latin1')))
-    
-    queue.put(struct.pack("20s", "20202020202020202020".encode('latin1')))
-    print("here")
+    tun = TunTapDevice("tun0")
+    tun.addr = '11.11.11.1'
+    tun.dstaddr = '11.11.11.2'
+    tun.netmask = '255.255.255.0'
+    tun.mtu = 200
+    tun.up()
+
+    for _ in range(2):
+        packet = tun.read(tun.mtu)
+        print(f"Packet: {packet}")
+        queue.put(packet)
 
     tx_process.join()
 

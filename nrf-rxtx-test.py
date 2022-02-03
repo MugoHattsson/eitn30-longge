@@ -1,4 +1,6 @@
 from multiprocessing import Process
+from multiprocessing import Manager
+from queue import Empty, Queue
 from circuitpython_nrf24l01.rf24 import RF24
 import board
 import busio
@@ -24,33 +26,40 @@ SPI1 = {
     'csn':dio.DigitalInOut(board.D18),
     }
 
-def tx(nrf, channel, address, size, msg):
+def prepare_packet(packet):
+    fragments = []
+    if len(packet) not in range(1, 33):
+        print(f"wrong packet size! {len(packet)}")
+    else:
+        fragments.append(packet)
+    return fragments
+
+def tx(nrf, channel, address, size, queue):
     nrf.open_tx_pipe(address)  # set address of RX node into a TX pipe
     nrf.listen = False
     nrf.channel = channel
 
     status = []
-    buffer = np.random.bytes(size)
 
-    start = time.monotonic()
-    count = 1
 
-    assert(len(msg) <= 32)
+    while(1):
+        try:
+            packet = queue.get(timeout = 5)
+        except Empty:
+            print("The queue is empty!")
+            break
+        packets = prepare_packet(packet)
 
-    while count:
-    # use struct.pack to packetize your data
-    # into a usable payload
+        for pkt in packets:
+            result = nrf.send(pkt)
 
-       buffer = struct.pack(f"{len(msg)}s", msg.encode("latin1"))
-       print("Sending: {} as struct: {}".format(msg, buffer))
-       result = nrf.send(buffer)
-       if not result:
-           print("send() failed or timed out")
-           status.append(False)
-       else:
-           print("send() successful")
-           status.append(True)
-       count -= 1
+            if not result:
+               print("send() failed or timed out")
+               status.append(False)
+            else:
+               print("send() successful")
+               status.append(True)
+    
 
     print('{} successfull transmissions, {} failures'.format(sum(status), len(status)-sum(status)))
 
@@ -110,15 +119,22 @@ if __name__ == "__main__":
     rx_process.start()
     time.sleep(1)
 
-    start = time.monotonic()
-    while (time.monotonic() - start) < 20:
-        msg = input(">")
-        if len(msg) not in range(1,33):
-            rx_process.kill()
-            break
+    manager = Manager()
+    queue = manager.Queue()
 
-        tx_process = Process(target=tx, kwargs={'nrf':tx_nrf, 'address':bytes(args.dst, 'utf-8'), 'channel': args.txchannel, 'size':args.size, 'msg':msg})
-        tx_process.start()
-        tx_process.join()
+    
+    tx_process = Process(target=tx, kwargs={'nrf':tx_nrf, 'address':bytes(args.dst, 'utf-8'), 'channel': args.txchannel, 'size':args.size, 'queue':queue})
+    tx_process.start()
+
+    queue.put(struct.pack("20s", "dettaär20byteskanske".encode('latin1')))
+    
+    queue.put(struct.pack("20s", "20202020202020202020".encode('latin1')))
+    print("here")
+
+    tx_process.join()
 
     rx_process.join()
+
+
+def wrap_message(msg):
+    nonsense_header = "dettaar20byteskanske"

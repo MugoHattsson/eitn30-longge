@@ -11,6 +11,7 @@ import argparse
 from random import randint
 import numpy as np
 from pytun import TunTapDevice
+import scapy.all as sa
 
 SPI0 = {
     'MOSI':10,#dio.DigitalInOut(board.D10),
@@ -27,12 +28,47 @@ SPI1 = {
     'csn':dio.DigitalInOut(board.D18),
     }
 
+def wrap_message(msg, header):
+
+    wrapped = b"{header}"
+
+    # 8 bytes   shockburst / our protocol / transport (payload)
+
+def make_zoomer(ip_header):
+
+    id = ip_header.id # package id (2 bytes)
+    flags = ip_header.flags #flags (3 bits)
+    frag_offset = ip_header.frag # fragment offset (1 byte)
+    protocol = ip_header.proto # protocol (1 byte)
+    dest_ip = ip_header.dst # (4 bytes)
+
+
+
+
 def prepare_packet(packet):
     fragments = []
     if len(packet) not in range(1, 33):
-        print(f"wrong packet size! {len(packet)}")
+        return
+
+        # start = 5
+        # end = 5
+        # eth_fmt = f"{start}s{len(packet) - start - end}s{end}"
+        # ip_packet = struct.unpack(eth_fmt, packet)
+        # ip_fmt = f"{21}s{len(ip_packet[1])-20}"
+
+        # transport_packet = struct.unpack(ip_fmt, ip_packet[1]) 
+
+        # reconstruct header 
+
+        # f"{1}s{1}s{2}s{2}s{2}s{1}s{1}s{2}s{4}s{4}s{len(ip_header)-20}s"
+        # ip_header = ip_packet[0]
+        # ip_fields_fmt = f"{1}s{1}s{2}s{2}s{2}s{1}s{1}s{2}s{4}s{4}s{len(ip_header)-20}s"
+        # ip_fields = struct.unpack(ip_fields_fmt, ip_header)
+        # bytes = b"\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xffhejhej"
+
     else:
-        fragments.append(packet)
+        zoomer = make_zoomer(header)
+        fragments.append(wrap_message(packet, zoomer))
     return fragments
 
 def tx(nrf, channel, address, size, queue):
@@ -52,7 +88,10 @@ def tx(nrf, channel, address, size, queue):
         packets = prepare_packet(packet)
 
         for pkt in packets:
-            result = nrf.send(pkt)
+
+            wrapped = wrap_message(pkt)
+
+            result = nrf.send(wrapped)
 
             if not result:
                print("send() failed or timed out")
@@ -133,15 +172,25 @@ if __name__ == "__main__":
     tun.mtu = 200
     tun.up()
 
-    for _ in range(2):
-        packet = tun.read(tun.mtu)
-        print(f"Packet: {packet}")
+
+
+    packet = tun.read(tun.mtu)[4:]
+    print(f"Packet: {packet}")
+    ip_packet = sa.IP(packet)
+    if (ip_packet.version == 4 and ip_packet.ihl == 5 and ip_packet.flags != sa.FlagValue(2, names=['', 'DF', 'MF'])):
+
         queue.put(packet)
+
+
 
     tx_process.join()
 
     rx_process.join()
 
 
-def wrap_message(msg):
+
+    
+
+
+
     nonsense_header = "dettaar20byteskanske"

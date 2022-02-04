@@ -12,6 +12,7 @@ from random import randint
 import numpy as np
 from pytun import TunTapDevice
 import scapy.all as sa
+from rip import RIP
 
 SPI0 = {
     'MOSI':10,#dio.DigitalInOut(board.D10),
@@ -34,21 +35,45 @@ def wrap_message(msg, header):
 
     # 8 bytes   shockburst / our protocol / transport (payload)
 
-def make_zoomer(ip_header):
+def ip_to_rip(ip_header):
+    rip = RIP()
 
-    id = ip_header.id # package id (2 bytes)
-    flags = ip_header.flags #flags (3 bits)
-    frag_offset = ip_header.frag # fragment offset (1 byte)
-    protocol = ip_header.proto # protocol (1 byte)
-    dest_ip = ip_header.dst # (4 bytes)
+    rip.id = ip_header.id # package id (2 bytes)
+    rip.ipflags = ip_header.flags #flags (3 bits)
+    rip.ipfrag = ip_header.frag # fragment offset (1 byte)
+    rip.protocol = ip_header.proto # protocol (1 byte)
+    rip.address = ip_header.src # (4 bytes)
+
+    return rip
 
 
-
-
-def prepare_packet(packet):
+def prepare_packet(payload, rip_header):
+    raw_bytes = sa.raw(payload)
     fragments = []
-    if len(packet) not in range(1, 33):
-        return
+    header_size = len(rip_header) # Should be 10 bytes
+    if len(raw_bytes) not in range(1, 33-header_size):
+        fragment_size = 32 - header_size
+
+        print("Payload:")
+        payload.show()
+        step = 0
+        while step < len(payload):
+            fragments.append(raw_bytes[step:step+fragment_size])
+            step += fragment_size   
+
+        print("Fragments:")
+        print(fragments)
+
+    # Slap RIP header onto every fragment
+    if fragments:
+        for offset, fragment in enumerate(fragments):
+            rip_header.mf = 1
+            rip_header.frag = offset
+            fragments[offset] = sa.raw(rip_header) + fragment
+
+        return fragments
+    else:
+        return [sa.raw(rip_header) + raw_bytes]
 
         # start = 5
         # end = 5
@@ -66,10 +91,6 @@ def prepare_packet(packet):
         # ip_fields = struct.unpack(ip_fields_fmt, ip_header)
         # bytes = b"\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xffhejhej"
 
-    else:
-        zoomer = make_zoomer(header)
-        fragments.append(wrap_message(packet, zoomer))
-    return fragments
 
 def tx(nrf, channel, address, size, queue):
     nrf.open_tx_pipe(address)  # set address of RX node into a TX pipe
@@ -85,13 +106,19 @@ def tx(nrf, channel, address, size, queue):
         except Empty:
             print("The queue is empty!")
             break
-        packets = prepare_packet(packet)
 
-        for pkt in packets:
+        # Create RIP header from IP header
+        rip_header = ip_to_rip(packet)
+        rip_header.show()
+        
+        # Separate IP header from its Data
+        # Prepare packet data by possibly fragmenting it
+        fragments = prepare_packet(packet.getlayer(1), rip_header)
 
-            wrapped = wrap_message(pkt)
 
-            result = nrf.send(wrapped)
+        # Send fragments
+        for frag in fragments:
+            result = nrf.send(frag)
 
             if not result:
                print("send() failed or timed out")
@@ -173,24 +200,15 @@ if __name__ == "__main__":
     tun.up()
 
 
-
     packet = tun.read(tun.mtu)[4:]
     print(f"Packet: {packet}")
-    ip_packet = sa.IP(packet)
-    if (ip_packet.version == 4 and ip_packet.ihl == 5 and ip_packet.flags != sa.FlagValue(2, names=['', 'DF', 'MF'])):
-
-        queue.put(packet)
+    ip_packet = sa.IP(packet)[0]
+    # if (ip_packet.version == 4 and ip_packet.ihl == 5 and ip_packet.flags != sa.FlagValue(2, names=['', 'DF', 'MF'])):
+    if (ip_packet.version == 4 and ip_packet.ihl == 5):
+        ip_packet.show()
+        queue.put(ip_packet)
 
 
 
     tx_process.join()
-
     rx_process.join()
-
-
-
-    
-
-
-
-    nonsense_header = "dettaar20byteskanske"

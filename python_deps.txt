@@ -1,7 +1,5 @@
 # install using: sudo pip install -r python_deps.txt
 
-board
 circuitpython-nrf24l01
-numpy
 scapy
 python-pytun

@@ -14,6 +14,9 @@ from pytun import TunTapDevice
 import scapy.all as sa
 from rip import RIP
 
+global isbase 
+isbase = 0
+
 SPI0 = {
     'MOSI':10,#dio.DigitalInOut(board.D10),
     'MISO':9,#dio.DigitalInOut(board.D9),
@@ -29,6 +32,9 @@ SPI1 = {
     'csn':dio.DigitalInOut(board.D18),
     }
 
+base_address = '11.11.11.1'
+mobile_address = '11.11.11.2'
+
 def wrap_message(msg, header):
 
     wrapped = b"{header}"
@@ -41,10 +47,39 @@ def ip_to_rip(ip_header):
     rip.id = ip_header.id # package id (2 bytes)
     rip.ipflags = ip_header.flags #flags (3 bits)
     rip.ipfrag = ip_header.frag # fragment offset (1 byte)
-    rip.protocol = ip_header.proto # protocol (1 byte)
+    rip.proto = ip_header.proto # protocol (1 byte)
     rip.address = ip_header.src # (4 bytes)
 
     return rip
+
+def rip_to_ip(rip):
+    ip = sa.IP()
+
+    ip.ihl = 5
+    ip.id = rip.id
+    ip.flags = rip.ipflags
+    ip.frag = rip.ipfrag
+    ip.proto = rip.proto
+    ip.src = mobile_address if isbase else rip.address
+    ip.dst = rip.address if isbase else mobile_address
+
+    return ip
+
+def prepare_ip(list):
+    header = list[0]
+
+    ip = rip_to_ip(header)
+
+
+    payload = b""
+
+    for frag in list:
+        payload += sa.raw(frag.getlayer(1))
+         
+    ip.len = len(ip) + len(payload)
+    ip.show()
+
+    return sa.raw(ip) + payload
 
 
 def prepare_packet(payload, rip_header):
@@ -67,8 +102,8 @@ def prepare_packet(payload, rip_header):
     # Slap RIP header onto every fragment
     if fragments:
         for offset, fragment in enumerate(fragments):
-            rip_header.mf = 1
-            rip_header.frag = offset
+            rip_header.mf = 0 if offset + 1 == len(fragments) else 1
+            rip_header.frag = offset 
             fragments[offset] = sa.raw(rip_header) + fragment
 
         return fragments
@@ -130,7 +165,25 @@ def tx(nrf, channel, address, size, queue):
 
     print('{} successfull transmissions, {} failures'.format(sum(status), len(status)-sum(status)))
 
-def rx(nrf, channel, address):
+def add_fragment(frag, list):
+    
+    length = len(list)
+    
+    if length == frag.frag:
+       list.append(frag)
+
+    elif length > frag.frag:
+        list[frag.frag] = frag     
+    else:
+        for i in range[frag.frag - length]:
+            list.append(None)
+        list.append(frag)
+    return list
+
+def rx(nrf, channel, address, tun):
+
+    fragments = {}
+
     nrf.open_rx_pipe(0, address)
     nrf.listen = True  # put radio into RX mode and power up
     nrf.channel = channel
@@ -142,16 +195,41 @@ def rx(nrf, channel, address):
     start_time = None
     start = time.monotonic()
     while (time.monotonic() - start) < 10:
-       if nrf.update() and nrf.pipe is not None:
-           if start_time is None:
-               start_time = time.monotonic()
+        if nrf.update() and nrf.pipe is not None:
+            if start_time is None:
+                start_time = time.monotonic()
 
-           received.append(nrf.any())
-           rx = nrf.read()  # also clears nrf.irq_dr status flag
-           buffer = struct.unpack(f"{len(rx)}s", rx)  # [:4] truncates padded 0s
-           # print the only item in the resulting tuple from
-           print("Received: {}".format(buffer[0].decode('latin1')))
-           #start = time.monotonic()
+            received.append(nrf.any())
+            rx = nrf.read()  # also clears nrf.irq_dr status flag
+
+            rip = RIP(rx)    
+            rip.show()
+
+            if rip.id in fragments.keys():
+
+                fragments.update({rip.id : add_fragment(rip, fragments[rip.id])})
+
+            else:
+
+                fragments.update({rip.id : [rip]})
+
+            complete = True
+            if (fragments[rip.id][-1].mf == 0):
+                for item in fragments[rip.id]:
+                   if item == None:
+                       complete = False
+            else:
+                complete = False
+
+            
+            if complete:
+                packet = prepare_ip(fragments[rip.id])
+                sa.IP(packet).show()
+                tun.write(packet)
+            buffer = struct.unpack(f"{len(rx)}s", rx)  # [:4] truncates padded 0s
+            # print the only item in the resulting tuple from
+            print("Received: {}".format(buffer[0].decode('latin1')))
+            #start = time.monotonic()
 
     print('{} received, {} average'.format(len(received), np.mean(received)))
 
@@ -163,6 +241,7 @@ if __name__ == "__main__":
     parser.add_argument('--size', dest='size', type=int, default=32, help='Packet size')
     parser.add_argument('--txchannel', dest='txchannel', type=int, default=76, help='Tx channel', choices=range(0,125))
     parser.add_argument('--rxchannel', dest='rxchannel', type=int, default=76, help='Rx channel', choices=range(0,125))
+    parser.add_argument('--isbase', dest='isbase', type=int, default=0, help='Whether the unit is mobile or the base station', choices=range(0,2))
 
     args = parser.parse_args()
 
@@ -182,7 +261,11 @@ if __name__ == "__main__":
         nrf.ack = 1
         nrf.spi_frequency = 20000000
 
-    rx_process = Process(target=rx, kwargs={'nrf':rx_nrf, 'address':bytes(args.src, 'utf-8'), 'channel': args.rxchannel})
+    tun = TunTapDevice("tun0")
+
+    isbase = args.isbase
+
+    rx_process = Process(target=rx, kwargs={'nrf':rx_nrf, 'address':bytes(args.src, 'utf-8'), 'channel': args.rxchannel, 'tun': tun})
     rx_process.start()
     time.sleep(1)
 
@@ -192,9 +275,9 @@ if __name__ == "__main__":
     tx_process = Process(target=tx, kwargs={'nrf':tx_nrf, 'address':bytes(args.dst, 'utf-8'), 'channel': args.txchannel, 'size':args.size, 'queue':queue})
     tx_process.start()
 
-    tun = TunTapDevice("tun0")
-    tun.addr = '11.11.11.1'
-    tun.dstaddr = '11.11.11.2'
+
+    tun.addr = base_address if isbase else mobile_address
+    tun.dstaddr = mobile_address if isbase else base_address
     tun.netmask = '255.255.255.0'
     tun.mtu = 200
     tun.up()
@@ -203,12 +286,14 @@ if __name__ == "__main__":
     packet = tun.read(tun.mtu)[4:]
     print(f"Packet: {packet}")
     ip_packet = sa.IP(packet)[0]
+    ip_packet.show()
     # if (ip_packet.version == 4 and ip_packet.ihl == 5 and ip_packet.flags != sa.FlagValue(2, names=['', 'DF', 'MF'])):
     if (ip_packet.version == 4 and ip_packet.ihl == 5):
-        ip_packet.show()
         queue.put(ip_packet)
 
 
 
     tx_process.join()
     rx_process.join()
+
+    tun.down()

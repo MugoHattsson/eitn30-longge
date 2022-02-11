@@ -110,21 +110,7 @@ def prepare_packet(payload, rip_header):
     else:
         return [sa.raw(rip_header) + raw_bytes]
 
-        # start = 5
-        # end = 5
-        # eth_fmt = f"{start}s{len(packet) - start - end}s{end}"
-        # ip_packet = struct.unpack(eth_fmt, packet)
-        # ip_fmt = f"{21}s{len(ip_packet[1])-20}"
-
-        # transport_packet = struct.unpack(ip_fmt, ip_packet[1]) 
-
-        # reconstruct header 
-
-        # f"{1}s{1}s{2}s{2}s{2}s{1}s{1}s{2}s{4}s{4}s{len(ip_header)-20}s"
-        # ip_header = ip_packet[0]
-        # ip_fields_fmt = f"{1}s{1}s{2}s{2}s{2}s{1}s{1}s{2}s{4}s{4}s{len(ip_header)-20}s"
-        # ip_fields = struct.unpack(ip_fields_fmt, ip_header)
-        # bytes = b"\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xffhejhej"
+       
 
 
 def tx(nrf, channel, address, size, queue):
@@ -137,7 +123,7 @@ def tx(nrf, channel, address, size, queue):
 
     while(1):
         try:
-            packet = queue.get(timeout = 5)
+            packet = queue.get(timeout = 1000)
         except Empty:
             print("The queue is empty!")
             break
@@ -194,7 +180,7 @@ def rx(nrf, channel, address, tun):
 
     start_time = None
     start = time.monotonic()
-    while (time.monotonic() - start) < 10:
+    while (time.monotonic() - start) < 1000:
         if nrf.update() and nrf.pipe is not None:
             if start_time is None:
                 start_time = time.monotonic()
@@ -225,7 +211,7 @@ def rx(nrf, channel, address, tun):
             if complete:
                 packet = prepare_ip(fragments[rip.id])
                 sa.IP(packet).show()
-                tun.write(packet)
+                tun.write(b'\x00\x00\x08\x00' + packet)
             buffer = struct.unpack(f"{len(rx)}s", rx)  # [:4] truncates padded 0s
             # print the only item in the resulting tuple from
             print("Received: {}".format(buffer[0].decode('latin1')))

@@ -120,6 +120,7 @@ def tx(nrf, channel, address, size, queue):
 
     status = []
 
+    print('Tx NRF24L01+ started w/ power {}, SPI freq: {} hz, on channel: {}'.format(nrf.pa_level, nrf.spi_frequency, nrf.channel))
 
     while(1):
         try:
@@ -174,7 +175,7 @@ def rx(nrf, channel, address, tun):
     nrf.listen = True  # put radio into RX mode and power up
     nrf.channel = channel
 
-    print('Rx NRF24L01+ started w/ power {}, SPI freq: {} hz'.format(nrf.pa_level, nrf.spi_frequency))
+    print('Rx NRF24L01+ started w/ power {}, SPI freq: {} hz, on channel: {}'.format(nrf.pa_level, nrf.spi_frequency, nrf.channel))
 
     received = []
 
@@ -268,18 +269,25 @@ if __name__ == "__main__":
     tun.mtu = 200
     tun.up()
 
+    try:
+        while True:
+            packet = tun.read(tun.mtu)[4:]
+            print(f"Packet: {packet}")
+            ip_packet = sa.IP(packet)[0]
+            ip_packet.show()
+            # if (ip_packet.version == 4 and ip_packet.ihl == 5 and ip_packet.flags != sa.FlagValue(2, names=['', 'DF', 'MF'])):
+            if (ip_packet.version == 4 and ip_packet.ihl == 5 and ip_packet.proto == 1):
+                queue.put(ip_packet)
+    except KeyboardInterrupt:
+        print("Caught keyboard interrupt!")
+        
 
-    packet = tun.read(tun.mtu)[4:]
-    print(f"Packet: {packet}")
-    ip_packet = sa.IP(packet)[0]
-    ip_packet.show()
-    # if (ip_packet.version == 4 and ip_packet.ihl == 5 and ip_packet.flags != sa.FlagValue(2, names=['', 'DF', 'MF'])):
-    if (ip_packet.version == 4 and ip_packet.ihl == 5):
-        queue.put(ip_packet)
 
-
+    print("Joining")
 
     tx_process.join()
     rx_process.join()
 
     tun.down()
+
+    print("Graceful shutdown complete")

@@ -1,0 +1,5 @@
+# install using: sudo pip install -r python_deps.txt
+
+circuitpython-nrf24l01
+scapy
+python-pytun

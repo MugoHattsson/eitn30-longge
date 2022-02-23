@@ -272,11 +272,11 @@ if __name__ == "__main__":
     try:
         while True:
             packet = tun.read(tun.mtu)[4:]
-            print(f"Packet: {packet}")
             ip_packet = sa.IP(packet)[0]
             ip_packet.show()
             # if (ip_packet.version == 4 and ip_packet.ihl == 5 and ip_packet.flags != sa.FlagValue(2, names=['', 'DF', 'MF'])):
             if (ip_packet.version == 4 and ip_packet.ihl == 5 and ip_packet.proto == 1):
+                print(f"Packet: {packet}")
                 queue.put(ip_packet)
     except KeyboardInterrupt:
         print("Caught keyboard interrupt!")

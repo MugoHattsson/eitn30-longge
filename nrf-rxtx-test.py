@@ -35,57 +35,27 @@ SPI1 = {
 base_address = '11.11.11.1'
 mobile_address = '11.11.11.2'
 
-def wrap_message(msg, header):
-
-    wrapped = b"{header}"
-
-    # 8 bytes   shockburst / our protocol / transport (payload)
 
 def ip_to_rip(ip_header):
     rip = RIP()
-
     rip.id = ip_header.id # package id (2 bytes)
-    rip.ipflags = ip_header.flags #flags (3 bits)
-    rip.ipfrag = ip_header.frag # fragment offset (1 byte)
-    rip.proto = ip_header.proto # protocol (1 byte)
-    rip.address = ip_header.src # (4 bytes)
-
     return rip
-
-def rip_to_ip(rip):
-    ip = sa.IP()
-
-    ip.ihl = 5
-    ip.id = rip.id
-    ip.flags = rip.ipflags
-    ip.frag = rip.ipfrag
-    ip.proto = rip.proto
-    ip.src = mobile_address if isbase else rip.address
-    ip.dst = rip.address if isbase else mobile_address
-
-    return ip
 
 def prepare_ip(list):
     header = list[0]
-
-    ip = rip_to_ip(header)
-
 
     payload = b""
 
     for frag in list:
         payload += sa.raw(frag.getlayer(1))
          
-    ip.len = len(ip) + len(payload)
-    ip.show()
-
-    return sa.raw(ip) + payload
+    return payload
 
 
 def prepare_packet(payload, rip_header):
     raw_bytes = sa.raw(payload)
     fragments = []
-    header_size = len(rip_header) # Should be 10 bytes
+    header_size = len(rip_header) # Should be 3 bytes
     if len(raw_bytes) not in range(1, 33-header_size):
         fragment_size = 32 - header_size
 
@@ -96,8 +66,8 @@ def prepare_packet(payload, rip_header):
             fragments.append(raw_bytes[step:step+fragment_size])
             step += fragment_size   
 
-        print("Fragments:")
-        print(fragments)
+        # print("Fragments:")
+        # print(fragments)
 
     # Slap RIP header onto every fragment
     if fragments:
@@ -135,7 +105,7 @@ def tx(nrf, channel, address, size, queue):
         
         # Separate IP header from its Data
         # Prepare packet data by possibly fragmenting it
-        fragments = prepare_packet(packet.getlayer(1), rip_header)
+        fragments = prepare_packet(packet, rip_header)
 
 
         # Send fragments
@@ -190,14 +160,12 @@ def rx(nrf, channel, address, tun):
             rx = nrf.read()  # also clears nrf.irq_dr status flag
 
             rip = RIP(rx)    
-            rip.show()
+            # rip.show()
 
             if rip.id in fragments.keys():
-
                 fragments.update({rip.id : add_fragment(rip, fragments[rip.id])})
 
             else:
-
                 fragments.update({rip.id : [rip]})
 
             complete = True
@@ -211,12 +179,9 @@ def rx(nrf, channel, address, tun):
             
             if complete:
                 packet = prepare_ip(fragments[rip.id])
+                print("Received packet on NRF:")
                 sa.IP(packet).show()
                 tun.write(b'\x00\x00\x08\x00' + packet)
-            buffer = struct.unpack(f"{len(rx)}s", rx)  # [:4] truncates padded 0s
-            # print the only item in the resulting tuple from
-            print("Received: {}".format(buffer[0].decode('latin1')))
-            #start = time.monotonic()
 
     print('{} received, {} average'.format(len(received), np.mean(received)))
 
@@ -273,10 +238,9 @@ if __name__ == "__main__":
         while True:
             packet = tun.read(tun.mtu)[4:]
             ip_packet = sa.IP(packet)[0]
-            ip_packet.show()
-            # if (ip_packet.version == 4 and ip_packet.ihl == 5 and ip_packet.flags != sa.FlagValue(2, names=['', 'DF', 'MF'])):
             if (ip_packet.version == 4 and ip_packet.ihl == 5 and ip_packet.proto == 1):
-                print(f"Packet: {packet}")
+                print("Received packet on tun0:")
+                ip_packet.show()
                 queue.put(ip_packet)
     except KeyboardInterrupt:
         print("Caught keyboard interrupt!")

@@ -60,7 +60,7 @@ def prepare_packet(payload, rip_header):
         fragment_size = 32 - header_size
 
         print("Payload:")
-        payload.show()
+        # payload.show()
         step = 0
         while step < len(payload):
             fragments.append(raw_bytes[step:step+fragment_size])
@@ -101,7 +101,7 @@ def tx(nrf, channel, address, size, queue):
 
         # Create RIP header from IP header
         rip_header = ip_to_rip(packet)
-        rip_header.show()
+        # rip_header.show()
         
         # Separate IP header from its Data
         # Prepare packet data by possibly fragmenting it
@@ -171,17 +171,24 @@ def rx(nrf, channel, address, tun):
             complete = True
             if (fragments[rip.id][-1].mf == 0):
                 for item in fragments[rip.id]:
-                   if item == None:
+                    if item == None:
                        complete = False
             else:
                 complete = False
 
             
             if complete:
-                packet = prepare_ip(fragments[rip.id])
+                frags = fragments.pop(rip.id)
+                for f in frags:
+                    print(f)
+                packet = prepare_ip(frags)
                 print("Received packet on NRF:")
-                sa.IP(packet).show()
-                tun.write(b'\x00\x00\x08\x00' + packet)
+                print(packet)
+                if len(packet) > 20:
+                    # sa.IP(packet).show()
+                    tun.write(b'\x00\x00\x08\x00' + packet)
+                else:
+                    print("Packet was None")
 
     print('{} received, {} average'.format(len(received), np.mean(received)))
 
@@ -231,16 +238,16 @@ if __name__ == "__main__":
     tun.addr = base_address if isbase else mobile_address
     tun.dstaddr = mobile_address if isbase else base_address
     tun.netmask = '255.255.255.0'
-    tun.mtu = 200
+    tun.mtu = 30000
     tun.up()
 
     try:
         while True:
             packet = tun.read(tun.mtu)[4:]
             ip_packet = sa.IP(packet)[0]
-            if (ip_packet.version == 4 and ip_packet.ihl == 5 and ip_packet.proto == 1):
+            if (ip_packet.version == 4):
                 print("Received packet on tun0:")
-                ip_packet.show()
+                # ip_packet.show()
                 queue.put(ip_packet)
     except KeyboardInterrupt:
         print("Caught keyboard interrupt!")

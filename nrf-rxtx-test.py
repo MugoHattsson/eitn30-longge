@@ -41,7 +41,7 @@ def ip_to_rip(ip_header):
     rip.id = ip_header.id # package id (2 bytes)
     return rip
 
-def prepare_ip(list):
+def defragment_packet(list):
     header = list[0]
 
     payload = b""
@@ -52,22 +52,17 @@ def prepare_ip(list):
     return payload
 
 
-def prepare_packet(payload, rip_header):
+def fragment_packet(payload, rip_header):
     raw_bytes = sa.raw(payload)
     fragments = []
     header_size = len(rip_header) # Should be 3 bytes
     if len(raw_bytes) not in range(1, 33-header_size):
         fragment_size = 32 - header_size
 
-        print("Payload:")
-        # payload.show()
         step = 0
         while step < len(payload):
             fragments.append(raw_bytes[step:step+fragment_size])
             step += fragment_size   
-
-        # print("Fragments:")
-        # print(fragments)
 
     # Slap RIP header onto every fragment
     if fragments:
@@ -101,11 +96,10 @@ def tx(nrf, channel, address, size, queue):
 
         # Create RIP header from IP header
         rip_header = ip_to_rip(packet)
-        # rip_header.show()
         
         # Separate IP header from its Data
         # Prepare packet data by possibly fragmenting it
-        fragments = prepare_packet(packet, rip_header)
+        fragments = fragment_packet(packet, rip_header)
 
 
         # Send fragments
@@ -132,7 +126,7 @@ def add_fragment(frag, list):
     elif length > frag.frag:
         list[frag.frag] = frag     
     else:
-        for i in range[frag.frag - length]:
+        for i in range(frag.frag - length):
             list.append(None)
         list.append(frag)
     return list
@@ -160,7 +154,6 @@ def rx(nrf, channel, address, tun):
             rx = nrf.read()  # also clears nrf.irq_dr status flag
 
             rip = RIP(rx)    
-            # rip.show()
 
             if rip.id in fragments.keys():
                 fragments.update({rip.id : add_fragment(rip, fragments[rip.id])})
@@ -179,13 +172,8 @@ def rx(nrf, channel, address, tun):
             
             if complete:
                 frags = fragments.pop(rip.id)
-                for f in frags:
-                    print(f)
-                packet = prepare_ip(frags)
-                print("Received packet on NRF:")
-                print(packet)
+                packet = defragment_packet(frags)
                 if len(packet) > 20:
-                    # sa.IP(packet).show()
                     tun.write(b'\x00\x00\x08\x00' + packet)
                 else:
                     print("Packet was None")
@@ -238,17 +226,20 @@ if __name__ == "__main__":
     tun.addr = base_address if isbase else mobile_address
     tun.dstaddr = mobile_address if isbase else base_address
     tun.netmask = '255.255.255.0'
-    tun.mtu = 30000
+    tun.mtu = 1500
     tun.up()
+
+    arrival = 0
+    avlen = 0
 
     try:
         while True:
             packet = tun.read(tun.mtu)[4:]
             ip_packet = sa.IP(packet)[0]
-            if (ip_packet.version == 4):
-                print("Received packet on tun0:")
-                # ip_packet.show()
+            if (ip_packet.version == 4 and ip_packet.proto in [1, 6]):
                 queue.put(ip_packet)
+                arrival += 1
+                avlen = avlen + 1/arrival * (queue.qsize() - avlen)
     except KeyboardInterrupt:
         print("Caught keyboard interrupt!")
         
@@ -261,4 +252,5 @@ if __name__ == "__main__":
 
     tun.down()
 
+    print(f"avlen: {avlen}, arrival/s: {arrival/60}")
     print("Graceful shutdown complete")

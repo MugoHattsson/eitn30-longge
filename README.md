@@ -1,5 +1,8 @@
 # eitn30-longge
 
+## Install dependencies
+  make deps
+
 ## How to run
 ### Base station
 1. make base
